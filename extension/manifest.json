@@ -1,0 +1,21 @@
+{
+  "manifest_version": 2,
+  "name": "Claude for Firefox",
+  "version": "0.1.0",
+  "description": "Lets Claude Code drive Firefox: open tabs, navigate, read pages, follow links.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "claude-firefox@local",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  },
+  "permissions": ["tabs", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "Claude for Firefox: disconnected"
+  }
+}

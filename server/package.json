@@ -1,0 +1,16 @@
+{
+  "name": "claude-firefox-mcp",
+  "version": "1.0.0",
+  "description": "MCP bridge between Claude Code and the Claude for Firefox extension",
+  "main": "index.js",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ws": "^8.22.2",
+    "zod": "^4.6.7"
+  }
+}
