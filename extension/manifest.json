@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Claude for Firefox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lets Claude Code drive Firefox: open tabs, navigate, read pages, follow links.",
   "browser_specific_settings": {
     "gecko": {
@@ -10,7 +10,7 @@
       "data_collection_permissions": { "required": ["none"] }
     }
   },
-  "permissions": ["tabs", "<all_urls>"],
+  "permissions": ["tabs", "webRequest", "webNavigation", "<all_urls>"],
   "background": {
     "scripts": ["background.js"],
     "persistent": true

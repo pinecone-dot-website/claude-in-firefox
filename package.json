@@ -6,6 +6,7 @@
     "setup": "npm --prefix server install",
     "firefox": "npx -y web-ext@8 run --source-dir extension",
     "lint": "npx -y web-ext@8 lint --source-dir extension",
-    "build": "npx -y web-ext@8 build --source-dir extension --overwrite-dest"
+    "build": "npx -y web-ext@8 build --source-dir extension --overwrite-dest",
+    "sign": "npx -y web-ext@8 sign --source-dir extension --channel unlisted"
   }
 }

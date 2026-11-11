@@ -230,5 +230,135 @@ if (!window.__claudeFirefox) {
     viewportHeight: window.innerHeight,
   });
 
-  window.__claudeFirefox = { getPageText, readPage, activate, fillInput, pageSize };
+  // --- scroll ---------------------------------------------------------------
+
+  const canScroll = (el) => {
+    const style = getComputedStyle(el);
+    return /(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
+  };
+
+  // Apps often scroll an inner panel rather than the page. If the page itself
+  // can't scroll, use the scrollable element under the middle of the viewport.
+  const getScroller = () => {
+    const doc = document.scrollingElement || document.documentElement;
+    if (doc.scrollHeight > window.innerHeight + 1) return doc;
+    let el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+    while (el && el !== document.body && el !== document.documentElement) {
+      if (canScroll(el)) return el;
+      el = el.parentElement;
+    }
+    for (const candidate of document.querySelectorAll("body *")) if (canScroll(candidate)) return candidate;
+    return doc;
+  };
+
+  const scrollPosition = () => {
+    const s = getScroller();
+    const isPage = s === document.scrollingElement || s === document.documentElement;
+    const viewport = isPage ? window.innerHeight : s.clientHeight;
+    return {
+      scroller: isPage ? "page" : describe(s).tag + (s.id ? `#${s.id}` : ""),
+      scrollY: Math.round(s.scrollTop),
+      scrollHeight: s.scrollHeight,
+      viewportHeight: viewport,
+      atTop: s.scrollTop <= 1,
+      atBottom: s.scrollTop + viewport >= s.scrollHeight - 2,
+    };
+  };
+
+  const scrollPage = ({ ref, refLabel, direction = "down", amount }) => {
+    if (ref) {
+      const el = findTarget({ ref, refLabel });
+      el.scrollIntoView({ block: "center" });
+      return { scrolledTo: describe(el) };
+    }
+    const s = getScroller();
+    const page = s === document.scrollingElement || s === document.documentElement;
+    const step = amount ?? Math.round((page ? window.innerHeight : s.clientHeight) * 0.8);
+    const top = { down: s.scrollTop + step, up: s.scrollTop - step, top: 0, bottom: s.scrollHeight }[direction];
+    if (top === undefined) throw new Error(`Unknown direction "${direction}".`);
+    s.scrollTo({ top, behavior: "instant" });
+    return {};
+  };
+
+  // --- hover ----------------------------------------------------------------
+
+  // Fires the pointer/mouse sequence a real cursor would. JS-driven menus
+  // react to it; CSS :hover can't be triggered by synthetic events.
+  const hover = ({ ref, refLabel }) => {
+    if (!ref) throw new Error("hover needs a ref from read_page or find.");
+    const el = findTarget({ ref, refLabel });
+    const r0 = el.getBoundingClientRect();
+    if (r0.bottom < 0 || r0.top > window.innerHeight) el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect();
+    const init = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    for (const [Ctor, type, bubbles] of [
+      [PointerEvent, "pointerover", true],
+      [PointerEvent, "pointerenter", false],
+      [MouseEvent, "mouseover", true],
+      [MouseEvent, "mouseenter", false],
+      [PointerEvent, "pointermove", true],
+      [MouseEvent, "mousemove", true],
+    ]) {
+      el.dispatchEvent(new Ctor(type, { ...init, bubbles, pointerType: "mouse" }));
+    }
+    return { hovered: describe(el) };
+  };
+
+  // --- find -----------------------------------------------------------------
+
+  // Ranked text search over everything visible: headings, paragraphs, labels,
+  // image alt text, not just interactive elements. A match inside a link or
+  // button reports the clickable element so its ref can be followed.
+  const find = ({ query, limit = 20 }) => {
+    const q = clean(query, 500).toLowerCase();
+    const words = q.split(" ").filter(Boolean);
+    if (!words.length) throw new Error("find needs a non-empty query.");
+
+    const candidates = new Set();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+    });
+    while (walker.nextNode()) {
+      const parent = walker.currentNode.parentElement;
+      if (parent && !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(parent.tagName)) candidates.add(parent);
+    }
+    for (const el of document.querySelectorAll(`${INTERACTIVE}, img[alt], [aria-label], [title]`)) candidates.add(el);
+
+    const hits = new Map(); // element -> {score, text}
+    for (const raw of candidates) {
+      const el = raw.closest(INTERACTIVE) || raw;
+      if (hits.has(el) || !isVisible(el)) continue;
+      const text = el.matches(INTERACTIVE) || el.tagName === "IMG" ? labelOf(el) : clean(el.innerText || "", 300);
+      const hay = `${text} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.getAttribute("alt") || ""}`.toLowerCase();
+      const matched = words.filter((w) => hay.includes(w)).length;
+      if (matched / words.length < 0.5) continue;
+      // Whole-phrase matches first, then more words matched, then shorter
+      // (more specific) text.
+      const score = (hay.includes(q) ? 2 : 0) + matched / words.length + 1 / (1 + text.length / 100);
+      hits.set(el, { score, text });
+    }
+
+    // Drop an element when a descendant also matched; the descendant is the
+    // more specific hit.
+    const els = [...hits.keys()];
+    const results = els
+      .filter((el) => !els.some((other) => other !== el && el.contains(other)))
+      .map((el) => ({ el, ...hits.get(el) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ el, text }) => ({ ...describe(el), text, interactive: el.matches(INTERACTIVE) }));
+    return { title: document.title, url: location.href, total: hits.size, results };
+  };
+
+  window.__claudeFirefox = {
+    getPageText,
+    readPage,
+    activate,
+    fillInput,
+    pageSize,
+    scrollPage,
+    scrollPosition,
+    hover,
+    find,
+  };
 }

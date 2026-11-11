@@ -107,7 +107,7 @@ function callExtension(method, params = {}) {
 // MCP tools
 // ---------------------------------------------------------------------------
 
-const server = new McpServer({ name: "claude-firefox", version: "0.1.0" });
+const server = new McpServer({ name: "claude-firefox", version: "0.2.0" });
 
 const asText = (value) => ({
   content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
@@ -233,6 +233,80 @@ server.registerTool(
       return { ...asText(`Error: ${err.message}`), isError: true };
     }
   },
+);
+
+tool(
+  "scroll",
+  'Scroll a page: direction "down"/"up" (about 80% of a screen, or amount pixels), "top"/"bottom", or to an ' +
+    "element by ref. Scrolls the inner panel when the app scrolls one instead of the page. Waits briefly for " +
+    "lazy-loaded content, then reports the position and whether it's at the bottom.",
+  {
+    tabId,
+    direction: z.enum(["down", "up", "top", "bottom"]).optional().describe('Default "down". Ignored when ref is given.'),
+    amount: z.number().int().positive().optional().describe("Pixels to scroll for up/down."),
+    ref: z.string().optional().describe("Scroll this element (from read_page or find) into view instead."),
+  },
+  "scroll",
+);
+
+tool(
+  "hover",
+  "Move the (synthetic) mouse over an element to open hover menus or tooltips, then call read_page or find " +
+    "to see what appeared. Works for JavaScript-driven hovers; pure CSS :hover can't be triggered this way.",
+  { tabId, ref: z.string().describe('Element ref from read_page or find, e.g. "t16-r12".') },
+  "hover",
+);
+
+tool(
+  "find",
+  "Search the visible page for elements matching a description: headings, paragraphs, labels, image alt " +
+    "text, links and buttons. Ranked by how well the words match; a hit inside a link or button returns the " +
+    "clickable element. Every result has a ref usable with follow_link, scroll, hover or form_input.",
+  {
+    tabId,
+    query: z.string().describe('Words to look for, e.g. "shipping address" or "sign in".'),
+    limit: z.number().int().positive().optional().describe("Max results (default 20)."),
+  },
+  "find",
+);
+
+tool(
+  "read_console_messages",
+  "Read console output (log/info/warn/error/debug) and uncaught errors from a tab. Capture is opt-in per tab: " +
+    "the first call starts it and returns nothing yet; reload the page to capture its load-time output. " +
+    "Messages survive navigations within the tab.",
+  {
+    tabId,
+    pattern: z.string().optional().describe("Only messages matching this regex (case-insensitive)."),
+    level: z
+      .enum(["debug", "log", "info", "warn", "error"])
+      .optional()
+      .describe('Minimum level, e.g. "warn" for warnings and errors.'),
+    limit: z.number().int().positive().optional().describe("Return the most recent N matches (default 100)."),
+    clear: z.boolean().optional().describe("Clear this tab's stored messages after reading."),
+  },
+  "read_console_messages",
+);
+
+tool(
+  "read_network_requests",
+  "List network requests a tab has made (method, URL, type, status, timing, errors), oldest first. Recorded " +
+    "for every tab automatically, in memory only (last 500 per tab).",
+  {
+    tabId,
+    pattern: z.string().optional().describe("Only URLs matching this regex (case-insensitive)."),
+    failedOnly: z.boolean().optional().describe("Only requests that errored or returned status >= 400."),
+    type: z
+      .string()
+      .optional()
+      .describe(
+        "Only this request type: main_frame, sub_frame, xmlhttprequest (fetch/XHR), script, stylesheet, image, " +
+          "font, media, websocket...",
+      ),
+    limit: z.number().int().positive().optional().describe("Return the most recent N matches (default 100)."),
+    clear: z.boolean().optional().describe("Clear this tab's stored requests after reading."),
+  },
+  "read_network_requests",
 );
 
 const requiredTabId =z.number().int().describe("Tab id from tabs_context or tabs_create.");

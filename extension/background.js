@@ -172,6 +172,111 @@ async function runInPage(tabId, fn, args) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function regexFrom(pattern) {
+  if (!pattern) return null;
+  try {
+    return new RegExp(pattern, "i");
+  } catch (err) {
+    throw new Error(`Invalid pattern: ${err.message}`);
+  }
+}
+
+// Keep at most `max` entries, dropping the oldest.
+function pushCapped(map, tabId, entry, max) {
+  let list = map.get(tabId);
+  if (!list) map.set(tabId, (list = []));
+  list.push(entry);
+  if (list.length > max) list.splice(0, list.length - max);
+}
+
+// ---------------------------------------------------------------------------
+// Network log: every tab, from the webRequest API (no page hooks), in memory
+// only, capped per tab, dropped when the tab closes.
+// ---------------------------------------------------------------------------
+
+const MAX_REQUESTS_PER_TAB = 500;
+const networkLogs = new Map(); // tabId -> [entry]
+const inFlight = new Map(); // requestId -> entry (latest hop of a redirect chain)
+const ALL_URLS = { urls: ["<all_urls>"] };
+
+browser.webRequest.onBeforeRequest.addListener((d) => {
+  if (d.tabId < 0) return;
+  const entry = { method: d.method, url: d.url, type: d.type, start: d.timeStamp };
+  inFlight.set(d.requestId, entry); // a redirect fires this again with the same id
+  pushCapped(networkLogs, d.tabId, entry, MAX_REQUESTS_PER_TAB);
+}, ALL_URLS);
+
+browser.webRequest.onBeforeRedirect.addListener((d) => {
+  const entry = inFlight.get(d.requestId);
+  if (!entry) return;
+  entry.status = d.statusCode;
+  entry.redirectTo = d.redirectUrl;
+  entry.ms = Math.round(d.timeStamp - entry.start);
+}, ALL_URLS);
+
+browser.webRequest.onCompleted.addListener((d) => {
+  const entry = inFlight.get(d.requestId);
+  if (!entry) return;
+  inFlight.delete(d.requestId);
+  entry.status = d.statusCode;
+  if (d.fromCache) entry.fromCache = true;
+  entry.ms = Math.round(d.timeStamp - entry.start);
+}, ALL_URLS);
+
+browser.webRequest.onErrorOccurred.addListener((d) => {
+  const entry = inFlight.get(d.requestId);
+  if (!entry) return;
+  inFlight.delete(d.requestId);
+  entry.error = d.error;
+  entry.ms = Math.round(d.timeStamp - entry.start);
+}, ALL_URLS);
+
+// ---------------------------------------------------------------------------
+// Console log: opt-in per tab. Hooking the console makes DevTools attribute
+// messages to the extension instead of the page, so only tabs Claude asked to
+// watch get hooked. See console-hook.js for how the opt-in persists.
+// ---------------------------------------------------------------------------
+
+const MAX_CONSOLE_PER_TAB = 1000;
+const consoleLogs = new Map(); // tabId -> [entry]
+const consoleWatched = new Set();
+const LEVELS = ["debug", "log", "info", "warn", "error"];
+
+// Runs before any page script on every page load, and hooks only tabs that
+// opted in. This is what catches a page's earliest console output.
+browser.contentScripts
+  .register({ matches: ["<all_urls>"], js: [{ file: "/console-hook.js" }], runAt: "document_start" })
+  .catch((err) => console.error("console hook registration failed:", err));
+
+// Opt a tab in now (sets its flag and hooks the current page).
+async function injectConsoleHook(tabId) {
+  await browser.tabs.executeScript(tabId, { file: "/console-hook.js", runAt: "document_start" });
+  await browser.tabs.executeScript(tabId, { code: "window.__claudeFirefoxConsole.start()", runAt: "document_start" });
+}
+
+// The opt-in flag is per site, so after the tab moves to a new site the
+// registered script won't hook it. Hook it here instead: slightly later, so
+// the new site's first page may miss its earliest messages, but the flag is
+// set again and later loads on that site are caught from the start.
+browser.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
+  if (frameId === 0 && consoleWatched.has(tabId)) injectConsoleHook(tabId).catch(() => {});
+});
+
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "console" || !sender.tab) return;
+  // A tab can still be flagged after the extension reloads; keep watching it.
+  consoleWatched.add(sender.tab.id);
+  for (const entry of msg.entries) pushCapped(consoleLogs, sender.tab.id, entry, MAX_CONSOLE_PER_TAB);
+});
+
+browser.tabs.onRemoved.addListener((tabId) => {
+  networkLogs.delete(tabId);
+  consoleLogs.delete(tabId);
+  consoleWatched.delete(tabId);
+});
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -297,6 +402,95 @@ const handlers = {
     await browser.tabs.remove(tabId);
     if (lastTabId === tabId) lastTabId = null;
     return { closed: tabSummary(tab) };
+  },
+
+  async scroll({ tabId, ref, direction, amount }) {
+    let localRef;
+    if (ref) ({ tabId, localRef } = parseRef(ref, tabId));
+    const tab = await resolveTab(tabId);
+    const result = await runInPage(tab.id, "scrollPage", { ref: localRef, refLabel: ref, direction, amount });
+    await sleep(500); // let lazy-loaded content arrive
+    const position = await runInPage(tab.id, "scrollPosition", {});
+    if (result.scrolledTo) result.scrolledTo = withGlobalRef(tab.id, result.scrolledTo);
+    // Firefox throttles background tabs, and the IntersectionObserver most
+    // infinite-scroll pages rely on barely runs there.
+    const current = await browser.tabs.get(tab.id);
+    const note = current.active
+      ? undefined
+      : "This tab is in the background, where Firefox throttles lazy loading. If more content was expected, tabs_activate it and scroll again.";
+    return { tabId: tab.id, ...result, ...position, ...(note ? { note } : {}) };
+  },
+
+  async hover({ tabId, ref }) {
+    if (!ref) throw new Error("hover needs a ref from read_page or find.");
+    const { tabId: owner, localRef } = parseRef(ref, tabId);
+    const tab = await resolveTab(owner);
+    const result = await runInPage(tab.id, "hover", { ref: localRef, refLabel: ref });
+    await sleep(300); // give hover menus time to open
+    return {
+      tabId: tab.id,
+      hovered: withGlobalRef(tab.id, result.hovered),
+      next: "Call read_page or find to see anything the hover revealed.",
+    };
+  },
+
+  async find({ tabId, query, limit }) {
+    const tab = await resolveTab(tabId);
+    const found = await runInPage(tab.id, "find", { query, limit });
+    found.results = found.results.map((el) => withGlobalRef(tab.id, el));
+    return { tabId: tab.id, ...found };
+  },
+
+  async read_console_messages({ tabId, pattern, level, limit = 100, clear }) {
+    const tab = await resolveTab(tabId);
+    if (!consoleWatched.has(tab.id)) {
+      await injectConsoleHook(tab.id).catch(async () => {
+        await runInPage(tab.id, "pageSize", {}); // throws the friendly "can't script this page" error
+      });
+      consoleWatched.add(tab.id);
+      return {
+        tabId: tab.id,
+        capturing: "started",
+        messages: [],
+        note:
+          "Console capture just started for this tab, so nothing has been recorded yet. To capture what " +
+          "the page logs while loading, reload it (navigate to its own URL), then call this again.",
+      };
+    }
+    const re = regexFrom(pattern);
+    await sleep(150); // the page sends messages asynchronously; let in-flight ones land
+    const minLevel = level ? LEVELS.indexOf(level) : 0;
+    const all = consoleLogs.get(tab.id) || [];
+    const matching = all.filter((m) => LEVELS.indexOf(m.level) >= minLevel && (!re || re.test(m.text)));
+    if (clear) consoleLogs.delete(tab.id);
+    return {
+      tabId: tab.id,
+      total: matching.length,
+      messages: matching.slice(-limit).map((m) => ({ ...m, time: new Date(m.time).toISOString() })),
+    };
+  },
+
+  async read_network_requests({ tabId, pattern, failedOnly, type, limit = 100, clear }) {
+    const tab = await resolveTab(tabId);
+    const re = regexFrom(pattern);
+    const all = networkLogs.get(tab.id) || [];
+    const matching = all.filter(
+      (r) =>
+        (!re || re.test(r.url)) &&
+        (!type || r.type === type) &&
+        (!failedOnly || r.error || r.status >= 400),
+    );
+    if (clear) networkLogs.delete(tab.id);
+    return {
+      tabId: tab.id,
+      total: matching.length,
+      requests: matching.slice(-limit).map(({ start, ...r }) => ({
+        ...r,
+        url: r.url.length > 300 ? r.url.slice(0, 299) + "…" : r.url,
+        time: new Date(start).toISOString(),
+        ...(r.status === undefined && !r.error ? { pending: true } : {}),
+      })),
+    };
   },
 };
 
