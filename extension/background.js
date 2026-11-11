@@ -92,6 +92,26 @@ function normalizeUrl(url) {
   return `https://${url}`;
 }
 
+// Refs are numbered per page ("r1", "r2"...) by content.js, so two tabs can
+// both have an "r1". Outside the page we namespace them by tab ("t16-r1"),
+// which lets follow_link find the right tab from the ref alone and refuse a
+// ref that's paired with the wrong tabId.
+const withGlobalRef = (tabId, el) => ({ ...el, ref: `t${tabId}-${el.ref}` });
+
+function parseRef(ref, tabId) {
+  const m = /^t(\d+)-(r\d+)$/.exec(ref.trim());
+  if (!m) {
+    throw new Error(
+      `Ref "${ref}" isn't a full ref. Use the ref exactly as read_page returned it, e.g. "t12-r4".`,
+    );
+  }
+  const owner = Number(m[1]);
+  if (tabId != null && tabId !== owner) {
+    throw new Error(`Ref ${ref} belongs to tab ${owner}, but tabId ${tabId} was given.`);
+  }
+  return { tabId: owner, localRef: m[2] };
+}
+
 // Firefox refuses to let extensions open privileged URLs (about:config,
 // file:, javascript:, data:...) and says only "Illegal URL". Spell it out.
 const explainIllegalUrl = (url) => (err) => {
@@ -182,23 +202,41 @@ const handlers = {
 
   async read_page({ tabId, filter, query, limit }) {
     const tab = await resolveTab(tabId);
-    return { tabId: tab.id, ...(await runInPage(tab.id, "readPage", { filter, query, limit })) };
+    const page = await runInPage(tab.id, "readPage", { filter, query, limit });
+    page.elements = page.elements.map((el) => withGlobalRef(tab.id, el));
+    return { tabId: tab.id, ...page };
   },
 
   async follow_link({ tabId, ref, text }) {
+    let localRef;
+    if (ref) ({ tabId, localRef } = parseRef(ref, tabId));
     const tab = await resolveTab(tabId);
     // Start listening before the click: a same-origin click can begin
     // navigating before executeScript even returns.
     const loaded = waitForLoad(tab.id, { expectStart: 2000 });
-    const outcome = await runInPage(tab.id, "activate", { ref, text });
+    const outcome = await runInPage(tab.id, "activate", { ref: localRef, refLabel: ref, text });
     if (outcome.action === "navigate") await browser.tabs.update(tab.id, { url: outcome.href });
     await loaded;
     const after = await browser.tabs.get(tab.id);
     return {
-      clicked: outcome.target,
+      clicked: withGlobalRef(tab.id, outcome.target),
       navigated: after.url !== tab.url,
       ...tabSummary(after),
     };
+  },
+
+  async tabs_activate({ tabId }) {
+    const tab = await browser.tabs.update(tabId, { active: true });
+    await browser.windows.update(tab.windowId, { focused: true });
+    lastTabId = tab.id;
+    return tabSummary(await browser.tabs.get(tab.id));
+  },
+
+  async tabs_close({ tabId }) {
+    const tab = await browser.tabs.get(tabId);
+    await browser.tabs.remove(tabId);
+    if (lastTabId === tabId) lastTabId = null;
+    return { closed: tabSummary(tab) };
   },
 };
 

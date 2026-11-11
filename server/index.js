@@ -164,8 +164,8 @@ tool(
 
 tool(
   "read_page",
-  "List links and interactive elements (buttons, inputs, etc.) on a page. Each gets a ref like \"r12\" " +
-    "that follow_link accepts. Refs are only valid until the page navigates.",
+  "List links and interactive elements (buttons, inputs, etc.) on a page. Each gets a ref like \"t16-r12\" " +
+    "(tab 16, element 12) that follow_link accepts. Refs are only valid until the page navigates.",
   {
     tabId,
     filter: z
@@ -182,13 +182,31 @@ tool(
   "follow_link",
   "Follow a link or click an element, then wait for any resulting navigation. Identify the target by a ref " +
     "from read_page, or by its visible text (first case-insensitive match; exact matches win). Links " +
-    "that would open a new tab open in the current tab instead.",
+    "that would open a new tab open in the current tab instead. A ref already names its tab, so tabId " +
+    "is optional with a ref (and must match it if given).",
   {
     tabId,
-    ref: z.string().optional().describe('Element ref from read_page, e.g. "r12".'),
+    ref: z.string().optional().describe('Element ref exactly as read_page returned it, e.g. "t16-r12".'),
     text: z.string().optional().describe("Visible link text to match, used when no ref is given."),
   },
   "follow_link",
+);
+
+const requiredTabId = z.number().int().describe("Tab id from tabs_context or tabs_create.");
+
+tool(
+  "tabs_activate",
+  "Bring a tab to the front (select it and focus its window) so the user can see it. Reading and " +
+    "clicking work fine in background tabs; use this only when the user should look at the tab.",
+  { tabId: requiredTabId },
+  "tabs_activate",
+);
+
+tool(
+  "tabs_close",
+  "Close a tab. Requires an explicit tabId — close only tabs you opened or the user asked you to close.",
+  { tabId: requiredTabId },
+  "tabs_close",
 );
 
 await server.connect(new StdioServerTransport());

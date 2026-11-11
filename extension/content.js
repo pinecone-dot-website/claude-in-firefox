@@ -83,11 +83,11 @@ if (!window.__claudeFirefox) {
     return { title: document.title, url: location.href, total: matched, elements };
   };
 
-  const findTarget = ({ ref, text }) => {
+  const findTarget = ({ ref, refLabel, text }) => {
     if (ref) {
       const el = refs.get(ref)?.deref();
       if (!el || !el.isConnected) {
-        throw new Error(`Ref ${ref} is stale or unknown — call read_page again.`);
+        throw new Error(`Ref ${refLabel || ref} is stale or unknown — call read_page again.`);
       }
       return el;
     }

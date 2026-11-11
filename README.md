@@ -33,16 +33,21 @@ claude mcp add --scope user firefox -- node /absolute/path/to/claude-firefox/ser
 
 ## Tools
 
-| Tool            | What it does                                                                                                         |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `tabs_context`  | List open tabs (id, title, url, active).                                                                             |
-| `tabs_create`   | Open a tab, optionally at a URL; waits for load.                                                                     |
-| `navigate`      | Go to a URL (bare domains get `https://`), or `"back"` / `"forward"`; waits for load.                                |
-| `get_page_text` | Readable page text (prefers `<main>`/`<article>`), with title and URL. `maxChars` truncates.                         |
-| `read_page`     | Visible links and interactive elements, each with a ref like `r12`. Filter with `filter: "links"` or `query`.        |
-| `follow_link`   | Follow or click by `ref` or by visible `text`, then wait for navigation. `target=_blank` links open in the same tab. |
+| Tool            | What it does                                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_context`  | List open tabs (id, title, url, active).                                                                                               |
+| `tabs_create`   | Open a tab, optionally at a URL; waits for load.                                                                                       |
+| `tabs_activate` | Bring a tab to the front and focus its window (only needed when _you_ should see it).                                                  |
+| `tabs_close`    | Close a tab. Always needs an explicit `tabId`.                                                                                         |
+| `navigate`      | Go to a URL (bare domains get `https://`), or `"back"` / `"forward"`; waits for load.                                                  |
+| `get_page_text` | Readable page text (prefers `<main>`/`<article>`), with title and URL. `maxChars` truncates.                                           |
+| `read_page`     | Visible links and interactive elements, each with a ref like `t16-r12` (tab 16, element 12). Filter with `filter: "links"` or `query`. |
+| `follow_link`   | Follow or click by `ref` or by visible `text`, then wait for navigation. `target=_blank` links open in the same tab.                   |
 
-Every tool takes an optional `tabId`. Without one it acts on the tab these tools last used (so
+Refs carry their tab, so `follow_link` with a ref needs no `tabId`, and it refuses a ref paired with
+the wrong `tabId` instead of clicking something on the wrong page.
+
+The other tools take an optional `tabId`. Without one it acts on the tab these tools last used (so
 Claude stays in its own tab while you click around elsewhere). If there isn't one, it falls back to
 the active tab of the focused window.
 
