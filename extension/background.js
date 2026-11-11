@@ -5,6 +5,9 @@
 const BRIDGE_URL = "ws://127.0.0.1:18765";
 const VERSION = browser.runtime.getManifest().version;
 const LOAD_TIMEOUT_MS = 30_000;
+// Claude rejects images over 8000px on a side and shrinks tall ones until
+// they're unreadable, so full-page captures stop here.
+const MAX_SCREENSHOT_HEIGHT = 4000;
 
 // ---------------------------------------------------------------------------
 // Connection
@@ -157,7 +160,13 @@ async function runInPage(tabId, fn, args) {
     const msg = err?.message || String(err);
     if (/Missing host permission|cannot be scripted|about:|privileged/i.test(msg)) {
       const tab = await browser.tabs.get(tabId);
-      throw new Error(`Firefox does not allow extensions to read this page (${tab.url}).`);
+      // An ordinary web URL that still can't be scripted is being shown by
+      // one of Firefox's built-in viewers (JSON, PDF, raw text...).
+      const why = /^https?:/.test(tab.url)
+        ? "it is displayed by a built-in Firefox viewer (JSON, PDF, etc.), which extensions can't script. " +
+          "screenshot still works on it"
+        : "it is a privileged browser page";
+      throw new Error(`Firefox does not allow extensions to read ${tab.url}: ${why}.`);
     }
     throw err;
   }
@@ -222,6 +231,57 @@ const handlers = {
       clicked: withGlobalRef(tab.id, outcome.target),
       navigated: after.url !== tab.url,
       ...tabSummary(after),
+    };
+  },
+
+  async form_input({ tabId, ref, value, submit }) {
+    if (!ref) throw new Error("form_input needs a ref from read_page.");
+    const parsed = parseRef(ref, tabId);
+    const tab = await resolveTab(parsed.tabId);
+    const loaded = submit ? waitForLoad(tab.id, { expectStart: 2000 }) : null;
+    const outcome = await runInPage(tab.id, "fillInput", { ref: parsed.localRef, refLabel: ref, value, submit });
+    await loaded;
+    const after = await browser.tabs.get(tab.id);
+    return {
+      ...outcome,
+      target: withGlobalRef(tab.id, outcome.target),
+      ...(submit ? { navigated: after.url !== tab.url } : {}),
+      ...tabSummary(after),
+    };
+  },
+
+  async screenshot({ tabId, fullPage, format = "jpeg" }) {
+    const tab = await resolveTab(tabId);
+    const options = { format, scale: 1 }; // 1 CSS px per image px, even on Retina
+    if (format === "jpeg") options.quality = 85;
+    let truncated = false;
+    // Viewport captures need nothing from the page, so they also work on
+    // pages extensions can't script (JSON/PDF viewers). Only fullPage has to
+    // ask the page how tall it is.
+    let size = { viewportWidth: tab.width, viewportHeight: tab.height };
+    let note = null;
+    if (fullPage) {
+      try {
+        size = await runInPage(tab.id, "pageSize", {});
+        truncated = size.height > MAX_SCREENSHOT_HEIGHT;
+        options.rect = { x: 0, y: 0, width: size.width, height: Math.min(size.height, MAX_SCREENSHOT_HEIGHT) };
+      } catch {
+        fullPage = false;
+        note = "fullPage isn't possible on this page (Firefox won't let extensions measure it); captured the viewport instead";
+      }
+    }
+    const dataUrl = await browser.tabs.captureTab(tab.id, options);
+    const [, mimeType, data] = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+    return {
+      image: { mimeType, data },
+      meta: {
+        tabId: tab.id,
+        title: tab.title,
+        url: tab.url,
+        captured: fullPage ? options.rect : { width: size.viewportWidth, height: size.viewportHeight },
+        ...(note ? { note } : {}),
+        ...(truncated ? { truncated: `page is ${size.height}px tall; captured the top ${MAX_SCREENSHOT_HEIGHT}px` } : {}),
+      },
     };
   },
 

@@ -33,16 +33,18 @@ claude mcp add --scope user firefox -- node /absolute/path/to/claude-firefox/ser
 
 ## Tools
 
-| Tool            | What it does                                                                                                                           |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_context`  | List open tabs (id, title, url, active).                                                                                               |
-| `tabs_create`   | Open a tab, optionally at a URL; waits for load.                                                                                       |
-| `tabs_activate` | Bring a tab to the front and focus its window (only needed when _you_ should see it).                                                  |
-| `tabs_close`    | Close a tab. Always needs an explicit `tabId`.                                                                                         |
-| `navigate`      | Go to a URL (bare domains get `https://`), or `"back"` / `"forward"`; waits for load.                                                  |
-| `get_page_text` | Readable page text (prefers `<main>`/`<article>`), with title and URL. `maxChars` truncates.                                           |
-| `read_page`     | Visible links and interactive elements, each with a ref like `t16-r12` (tab 16, element 12). Filter with `filter: "links"` or `query`. |
-| `follow_link`   | Follow or click by `ref` or by visible `text`, then wait for navigation. `target=_blank` links open in the same tab.                   |
+| Tool            | What it does                                                                                                                                                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_context`  | List open tabs (id, title, url, active).                                                                                                                                                                                                    |
+| `tabs_create`   | Open a tab, optionally at a URL; waits for load.                                                                                                                                                                                            |
+| `tabs_activate` | Bring a tab to the front and focus its window (only needed when _you_ should see it).                                                                                                                                                       |
+| `tabs_close`    | Close a tab. Always needs an explicit `tabId`.                                                                                                                                                                                              |
+| `navigate`      | Go to a URL (bare domains get `https://`), or `"back"` / `"forward"`; waits for load.                                                                                                                                                       |
+| `get_page_text` | Readable page text (prefers `<main>`/`<article>`), with title and URL. `maxChars` truncates.                                                                                                                                                |
+| `read_page`     | Visible links and interactive elements, each with a ref like `t16-r12` (tab 16, element 12), plus field labels, current values and checked state. Filter with `filter: "links"` or `query`.                                                 |
+| `follow_link`   | Follow or click by `ref` or by visible `text`, then wait for navigation. `target=_blank` links open in the same tab.                                                                                                                        |
+| `form_input`    | Fill a field by ref: type into text inputs, textareas and rich editors; pick a `<select>` option by value or label; set checkboxes/radios with `true`/`false`. `submit: true` submits the form (or presses Enter) and waits for navigation. |
+| `screenshot`    | Capture a tab, even a background one. Viewport by default; `fullPage: true` for the whole page (up to 4000px tall). JPEG by default, `format: "png"` for sharper.                                                                           |
 
 Refs carry their tab, so `follow_link` with a ref needs no `tabId`, and it refuses a ref paired with
 the wrong `tabId` instead of clicking something on the wrong page.
@@ -64,6 +66,11 @@ the active tab of the focused window.
 - **Off-limits pages:** Firefox won't let extensions script `about:` pages, `addons.mozilla.org`, or
   other privileged pages. The tools return a clear error instead.
 - Refs from `read_page` stop working once the page navigates. Call `read_page` again.
+- **Typing is simulated.** Firefox gives extensions no way to send real OS keystrokes, so
+  `form_input` uses the browser's editing commands, then synthetic events as a fallback. That covers
+  ordinary forms, React-style apps and most rich editors. Sites that only accept trusted key events
+  (some games, a few anti-bot login forms) may ignore it.
+- `read_page` reports password fields as `(filled)` or empty and never returns their contents.
 
 ## Development
 

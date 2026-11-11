@@ -192,7 +192,50 @@ tool(
   "follow_link",
 );
 
-const requiredTabId = z.number().int().describe("Tab id from tabs_context or tabs_create.");
+tool(
+  "form_input",
+  "Fill in a form field by ref from read_page: types into text inputs, textareas and rich editors " +
+    "(replacing what's there), picks a <select> option by value or visible label, or sets a checkbox/radio " +
+    "with true/false. Set submit to submit the form afterwards (or press Enter if there's no form) and wait " +
+    "for any navigation. Events are synthetic, so a few sites that only trust real keystrokes may ignore them.",
+  {
+    tabId,
+    ref: z.string().describe('Field ref exactly as read_page returned it, e.g. "t16-r12".'),
+    value: z.union([z.string(), z.boolean()]).describe("Text to enter, option to choose, or true/false for a checkbox."),
+    submit: z.boolean().optional().describe("Submit the form after filling this field."),
+  },
+  "form_input",
+);
+
+server.registerTool(
+  "screenshot",
+  {
+    description:
+      "Take a screenshot of a tab, which can be in the background. Captures the visible viewport by default; " +
+      "fullPage captures the whole page (up to 4000px tall). Use get_page_text for reading text; " +
+      "screenshots are for layout, images, and visual state.",
+    inputSchema: {
+      tabId,
+      fullPage: z.boolean().optional().describe("Capture the whole scrollable page instead of the viewport."),
+      format: z.enum(["jpeg", "png"]).optional().describe("Image format (default jpeg; png is sharper but larger)."),
+    },
+  },
+  async (args) => {
+    try {
+      const { image, meta } = await callExtension("screenshot", args);
+      return {
+        content: [
+          { type: "image", data: image.data, mimeType: image.mimeType },
+          { type: "text", text: JSON.stringify(meta, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return { ...asText(`Error: ${err.message}`), isError: true };
+    }
+  },
+);
+
+const requiredTabId =z.number().int().describe("Tab id from tabs_context or tabs_create.");
 
 tool(
   "tabs_activate",
